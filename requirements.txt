@@ -2,3 +2,5 @@ pandas
 numpy
 scikit-learn
 pytest
+groq
+python-dotenv

@@ -1,7 +1,5 @@
 """
-Quick manual test — confirms Modules 1, 2, and 3 work end to end.
-Loads a dataset, profiles it, decides preprocessing, then selects a model
-and compares it against a fixed baseline.
+Quick manual test — confirms Modules 1-4 work end to end.
 """
 import json
 import pandas as pd
@@ -9,6 +7,7 @@ from sklearn.datasets import load_breast_cancer
 from src.profiler import DataProfiler
 from src.preprocessor import PreprocessingDecider
 from src.model_selector import ModelSelector
+from src.narrator import Narrator
 
 
 def load_sample_dataset() -> pd.DataFrame:
@@ -31,3 +30,7 @@ if __name__ == "__main__":
     print("\n=== MODEL SELECTION (this will take ~10-20 seconds) ===")
     result = ModelSelector(df, profile, plan).select()
     print(json.dumps(result.to_dict(), indent=2))
+
+    print("\n=== NARRATION ===")
+    narration = Narrator().narrate(profile, plan, result)
+    print(narration)
