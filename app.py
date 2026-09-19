@@ -49,11 +49,11 @@ st.divider()
 
 uploaded_file = st.file_uploader("Upload a CSV file (up to 1GB)", type=["csv"])
 
-@st.cache_data
-def load_csv(file):
-    return pd.read_csv(file)
-
 if uploaded_file is not None:
+    @st.cache_data
+    def load_csv(file):
+        return pd.read_csv(file)
+
     df = load_csv(uploaded_file)
 
     c1, c2, c3 = st.columns(3)
@@ -65,17 +65,29 @@ if uploaded_file is not None:
         st.dataframe(df.head(20), width="stretch")
 
     target_column = st.selectbox("Select the target (label) column", df.columns)
+
+    if df.shape[0] > 10000:
+        sample_mode = st.checkbox(
+            f"Fast mode: sample 10,000 of {df.shape[0]:,} rows for a quicker run "
+            f"(uncheck for the full dataset — slower but more accurate)",
+            value=True,
+        )
+    else:
+        sample_mode = False
+
     run = st.button("🚀 Run DataNarrate", type="primary", width="stretch")
 
     if run:
+        run_df = df.sample(n=10000, random_state=42) if sample_mode else df
+
         with st.spinner("Profiling dataset..."):
-            profile = DataProfiler(df, target_column=target_column).profile()
+            profile = DataProfiler(run_df, target_column=target_column).profile()
         with st.spinner("Deciding preprocessing steps..."):
             plan = PreprocessingDecider(profile).decide()
 
         try:
             with st.spinner("Comparing 4 models — this takes a minute or two..."):
-                result = ModelSelector(df, profile, plan).select()
+                result = ModelSelector(run_df, profile, plan).select()
         except InsufficientDataError as e:
             st.error(f"Can't run model comparison: {e}")
             st.stop()
@@ -92,7 +104,10 @@ if uploaded_file is not None:
             narration = Narrator().narrate(profile, plan, result)
 
         storage = RunStorage()
-        run_id = storage.save_run(uploaded_file.name, profile, plan, result, narration)
+        run_id = storage.save_run(
+            f"{uploaded_file.name} (10k sample)" if sample_mode else uploaded_file.name,
+            profile, plan, result, narration,
+        )
 
         tabs = st.tabs(["📋 Overview", "🔧 Preprocessing", "📊 Model Comparison", "🧩 Confusion Matrices", "💡 Why This Model", "📝 Narration"])
 
