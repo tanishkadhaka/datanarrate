@@ -5,7 +5,9 @@ ensemble, a boosting ensemble, and an explicit voting ensemble combining
 all three — reports a full metric suite and confusion matrix for each,
 explains each model's gains/limitations against the actual measured
 numbers, keeps per-fold scores for significance testing, and compares
-the winner against a fixed baseline pipeline.
+the winner against a fixed baseline pipeline. Fits each model once per
+fold (not twice), parallelizes tree-based models, and automatically
+adapts the number of CV folds to the smallest class.
 """
 
 from dataclasses import dataclass, field
@@ -20,10 +22,10 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
-from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, confusion_matrix,
+    roc_auc_score, confusion_matrix, get_scorer,
 )
 
 from src.profiler import DatasetProfile
@@ -42,6 +44,11 @@ class FrequencyEncoder(BaseEstimator, TransformerMixin):
         for i, (_, col) in enumerate(X.items()):
             out[:, i] = col.map(self.freq_maps_[i]).fillna(0.0).values
         return out
+
+
+class InsufficientDataError(Exception):
+    """Raised when a class has too few examples to cross-validate at all."""
+    pass
 
 
 @dataclass
@@ -68,6 +75,7 @@ class SelectionResult:
     improvement_over_baseline: float
     final_justification: str = ""
     fold_scores: Dict[str, List[float]] = field(default_factory=dict)
+    cv_folds_used: int = 5
 
     def to_dict(self) -> dict:
         return {
@@ -80,14 +88,15 @@ class SelectionResult:
             "improvement_over_baseline": round(self.improvement_over_baseline, 4),
             "final_justification": self.final_justification,
             "fold_scores": self.fold_scores,
+            "cv_folds_used": self.cv_folds_used,
         }
 
 
 def _build_candidates() -> Dict[str, Any]:
     lr = LogisticRegression(max_iter=2000, class_weight="balanced")
-    rf = RandomForestClassifier(n_estimators=200, random_state=42, class_weight="balanced")
+    rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight="balanced", n_jobs=-1)
     gb = GradientBoostingClassifier(random_state=42)
-    voting = VotingClassifier(estimators=[("lr", lr), ("rf", rf), ("gb", gb)], voting="soft")
+    voting = VotingClassifier(estimators=[("lr", lr), ("rf", rf), ("gb", gb)], voting="soft", n_jobs=-1)
     return {
         "logistic_regression": lr,
         "random_forest": rf,
@@ -131,14 +140,25 @@ class ModelSelector:
         y = le.fit_transform(y_raw)
         is_binary = len(le.classes_) == 2
 
+        class_counts = np.bincount(y)
+        min_class_count = int(class_counts.min())
+        if min_class_count < 2:
+            raise InsufficientDataError(
+                f"The rarest class in '{self.target}' has only {min_class_count} example(s). "
+                f"Cross-validation needs at least 2 examples per class to run at all — "
+                f"please upload a dataset with more examples of every class."
+            )
+        effective_cv_folds = min(cv_folds, min_class_count)
+
         dropped = [d.column for d in self.plan.column_decisions if d.missing_action == "drop_column"]
         X = X_full.drop(columns=[c for c in dropped if c in X_full.columns])
 
         metric_used = "f1" if (self.profile.is_imbalanced or not is_binary) else "accuracy"
         scorer_name = "accuracy" if metric_used == "accuracy" else ("f1" if is_binary else "f1_macro")
+        scorer = get_scorer(scorer_name)
 
         preprocessor = self._build_decided_preprocessor(X)
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+        cv = StratifiedKFold(n_splits=effective_cv_folds, shuffle=True, random_state=random_state)
 
         candidate_results = []
         fold_scores = {}
@@ -146,13 +166,24 @@ class ModelSelector:
 
         for name, model in _build_candidates().items():
             pipe = Pipeline([("preprocess", preprocessor), ("model", model)])
-            y_pred = cross_val_predict(pipe, X, y, cv=cv)
-            fold_scores[name] = cross_val_score(pipe, X, y, cv=cv, scoring=scorer_name).tolist()
 
-            y_proba = None
-            if is_binary:
-                proba = cross_val_predict(pipe, X, y, cv=cv, method="predict_proba")
-                y_proba = proba[:, 1]
+            fold_preds = np.empty(len(y), dtype=y.dtype)
+            fold_proba = np.empty(len(y)) if is_binary else None
+            per_fold_scores = []
+
+            for train_idx, test_idx in cv.split(X, y):
+                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+                y_train, y_test = y[train_idx], y[test_idx]
+
+                fitted = Pipeline(pipe.steps).fit(X_train, y_train)
+                fold_preds[test_idx] = fitted.predict(X_test)
+                per_fold_scores.append(scorer(fitted, X_test, y_test))
+                if is_binary:
+                    fold_proba[test_idx] = fitted.predict_proba(X_test)[:, 1]
+
+            y_pred = fold_preds
+            fold_scores[name] = per_fold_scores
+            y_proba = fold_proba
 
             acc = accuracy_score(y, y_pred)
             avg = "binary" if is_binary else "macro"
@@ -182,6 +213,7 @@ class ModelSelector:
             best_score=float(best_score), baseline_score=float(baseline_score),
             improvement_over_baseline=float(best_score - baseline_score),
             final_justification=justification, fold_scores=fold_scores,
+            cv_folds_used=effective_cv_folds,
         )
 
     def _build_justification(self, results, best_name, metric, baseline) -> str:
