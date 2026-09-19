@@ -4,7 +4,8 @@ Cross-validates 4 candidate classifiers — a linear model, a bagging
 ensemble, a boosting ensemble, and an explicit voting ensemble combining
 all three — reports a full metric suite and confusion matrix for each,
 explains each model's gains/limitations against the actual measured
-numbers, and compares the winner against a fixed baseline pipeline.
+numbers, keeps per-fold scores for significance testing, and compares
+the winner against a fixed baseline pipeline.
 """
 
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_val_score
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix,
@@ -66,6 +67,7 @@ class SelectionResult:
     baseline_score: float
     improvement_over_baseline: float
     final_justification: str = ""
+    fold_scores: Dict[str, List[float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -77,12 +79,13 @@ class SelectionResult:
             "baseline_score": round(self.baseline_score, 4),
             "improvement_over_baseline": round(self.improvement_over_baseline, 4),
             "final_justification": self.final_justification,
+            "fold_scores": self.fold_scores,
         }
 
 
 def _build_candidates() -> Dict[str, Any]:
-    lr = LogisticRegression(max_iter=1000)
-    rf = RandomForestClassifier(n_estimators=200, random_state=42)
+    lr = LogisticRegression(max_iter=2000, class_weight="balanced")
+    rf = RandomForestClassifier(n_estimators=200, random_state=42, class_weight="balanced")
     gb = GradientBoostingClassifier(random_state=42)
     voting = VotingClassifier(estimators=[("lr", lr), ("rf", rf), ("gb", gb)], voting="soft")
     return {
@@ -132,16 +135,20 @@ class ModelSelector:
         X = X_full.drop(columns=[c for c in dropped if c in X_full.columns])
 
         metric_used = "f1" if (self.profile.is_imbalanced or not is_binary) else "accuracy"
+        scorer_name = "accuracy" if metric_used == "accuracy" else ("f1" if is_binary else "f1_macro")
 
         preprocessor = self._build_decided_preprocessor(X)
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
 
         candidate_results = []
+        fold_scores = {}
         best_name, best_score = None, -np.inf
 
         for name, model in _build_candidates().items():
             pipe = Pipeline([("preprocess", preprocessor), ("model", model)])
             y_pred = cross_val_predict(pipe, X, y, cv=cv)
+            fold_scores[name] = cross_val_score(pipe, X, y, cv=cv, scoring=scorer_name).tolist()
+
             y_proba = None
             if is_binary:
                 proba = cross_val_predict(pipe, X, y, cv=cv, method="predict_proba")
@@ -174,7 +181,7 @@ class ModelSelector:
             candidate_results=candidate_results, best_model_name=best_name,
             best_score=float(best_score), baseline_score=float(baseline_score),
             improvement_over_baseline=float(best_score - baseline_score),
-            final_justification=justification,
+            final_justification=justification, fold_scores=fold_scores,
         )
 
     def _build_justification(self, results, best_name, metric, baseline) -> str:
