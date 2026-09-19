@@ -1,11 +1,8 @@
 """
 Module 4 — Narration Layer
-Takes the outputs of Modules 1–3 (profile, preprocessing plan, model selection
-result) and produces a plain-English explanation via an LLM. This module is
-strictly a describer, not a decider — it is never allowed to introduce any
-number, model name, or claim that isn't already present in the inputs.
+Describes the outputs of Modules 1-3 in plain English. Strictly grounded —
+only describes numbers/decisions that already exist, never invents anything.
 """
-
 import os
 from groq import Groq
 from dotenv import load_dotenv
@@ -15,21 +12,16 @@ from src.preprocessor import PreprocessingPlan
 from src.model_selector import SelectionResult
 
 load_dotenv()
-
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 SYSTEM_PROMPT = (
     "You are a narration assistant for an automated machine learning tool. "
-    "You will be given a dataset profile, a set of preprocessing decisions, "
-    "and model selection results. Write a clear, plain-English summary for a "
-    "student audience explaining what was done and why. "
-    "Rules you must follow strictly: "
-    "1. Only describe numbers, decisions, and model names that appear in the "
-    "provided data — never invent or estimate anything. "
-    "2. Do not suggest any additional preprocessing steps or models beyond "
-    "what was already decided. "
-    "3. Keep it to 3-5 short paragraphs. "
-    "4. Do not use markdown headers."
+    "You will be given a dataset profile, preprocessing steps taken, and "
+    "model comparison results including per-model metrics and a final "
+    "justification. Write a clear, plain-English summary for a student "
+    "audience. Rules: only describe numbers/decisions already provided, "
+    "never invent or estimate anything; do not suggest further steps; "
+    "keep it to 4-6 short paragraphs; no markdown headers."
 )
 
 
@@ -41,43 +33,32 @@ class Narrator:
         self.client = Groq(api_key=key)
         self.model = model
 
-    def build_prompt(
-        self,
-        profile: DatasetProfile,
-        plan: PreprocessingPlan,
-        result: SelectionResult,
-    ) -> str:
+    def build_prompt(self, profile: DatasetProfile, plan: PreprocessingPlan, result: SelectionResult) -> str:
         lines = [
-            f"Dataset: {profile.n_rows} rows, {profile.n_cols} columns.",
-            f"Task type: {profile.task_type}, {profile.n_classes} classes.",
-            f"Imbalanced: {profile.is_imbalanced}.",
+            f"Dataset: {profile.n_rows} rows, {profile.n_cols} columns, "
+            f"{profile.n_classes} classes, imbalanced={profile.is_imbalanced}.",
             "",
-            "Preprocessing decisions summary:",
+            "Preprocessing steps taken:",
         ]
         lines.extend(f"- {s}" for s in plan.summary)
         lines.append("")
-        lines.append(f"Evaluation metric used: {result.metric_used}")
-        lines.append("Candidate models and their cross-validated scores:")
-        for c in result.candidate_results:
-            lines.append(f"- {c.model_name}: {round(c.mean_score, 4)} (std {round(c.std_score, 4)})")
-        lines.append(f"Best model selected: {result.best_model_name} (score {round(result.best_score, 4)})")
-        lines.append(f"Fixed baseline pipeline score: {round(result.baseline_score, 4)}")
-        lines.append(f"Improvement over baseline: {round(result.improvement_over_baseline, 4)}")
+        lines.append(f"Metric used: {result.metric_used}")
+        lines.append("Model comparison:")
+        for r in result.candidate_results:
+            lines.append(
+                f"- {r.model_name}: accuracy={round(r.accuracy,4)}, precision={round(r.precision,4)}, "
+                f"recall={round(r.recall,4)}, f1={round(r.f1,4)}, roc_auc={round(r.roc_auc,4) if r.roc_auc==r.roc_auc else 'N/A'}"
+            )
+        lines.append(f"Baseline score: {round(result.baseline_score, 4)}")
+        lines.append(f"Winner: {result.best_model_name}, improvement over baseline: {round(result.improvement_over_baseline, 4)}")
+        lines.append(f"Justification: {result.final_justification}")
         return "\n".join(lines)
 
-    def narrate(
-        self,
-        profile: DatasetProfile,
-        plan: PreprocessingPlan,
-        result: SelectionResult,
-    ) -> str:
+    def narrate(self, profile: DatasetProfile, plan: PreprocessingPlan, result: SelectionResult) -> str:
         prompt = self.build_prompt(profile, plan, result)
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
             temperature=0.3,
         )
         return response.choices[0].message.content
