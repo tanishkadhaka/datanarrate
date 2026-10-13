@@ -1,0 +1,199 @@
+Loaded 8124 rows, 23 columns from mushroom.csv
+Target column: 'target'
+Target value counts:
+target
+e    4208
+p    3916
+Name: count, dtype: int64
+
+
+=== PROFILE ===
+8124 rows, 23 cols, 2 classes, imbalanced=False
+
+=== PREPROCESSING STEP TRACE ===
+- [cap-shape] 6 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [cap-surface] 4 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [cap-color] 10 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [bruises%3F] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [odor] 9 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [gill-attachment] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [gill-spacing] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [gill-size] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [gill-color] 12 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-shape] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-root] 30.53% missing — imputing with the most frequent category keeps the row without inventing a numeric value.
+- [stalk-root] 4 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-surface-above-ring] 4 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-surface-below-ring] 4 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-color-above-ring] 9 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [stalk-color-below-ring] 9 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [veil-type] 1 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [veil-color] 4 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [ring-number] 3 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [ring-type] 5 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [spore-print-color] 9 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [population] 6 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [habitat] 7 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+
+=== MODEL SELECTION (running 4 models, this may take a while) ===
+{
+  "metric_used": "accuracy",
+  "dropped_columns": [],
+  "candidate_results": [
+    {
+      "model_name": "logistic_regression",
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "confusion_matrix": [
+        [
+          4208,
+          0
+        ],
+        [
+          0,
+          3916
+        ]
+      ],
+      "gains": [
+        "Fast to train and easy to interpret",
+        "Performs well when classes are close to linearly separable"
+      ],
+      "limitations": [
+        "Can't capture non-linear relationships on its own"
+      ]
+    },
+    {
+      "model_name": "random_forest",
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "confusion_matrix": [
+        [
+          4208,
+          0
+        ],
+        [
+          0,
+          3916
+        ]
+      ],
+      "gains": [
+        "Robust to noise via averaging many trees (bagging)",
+        "Handles non-linear patterns and feature interactions well"
+      ],
+      "limitations": [
+        "Can be outperformed by simpler models when the true relationship is close to linear",
+        "Less interpretable than a single tree or linear model"
+      ]
+    },
+    {
+      "model_name": "gradient_boosting",
+      "accuracy": 0.9997538158542589,
+      "precision": 1.0,
+      "recall": 0.9994892747701737,
+      "f1": 0.9997445721583652,
+      "roc_auc": 1.0,
+      "confusion_matrix": [
+        [
+          4208,
+          0
+        ],
+        [
+          2,
+          3914
+        ]
+      ],
+      "gains": [
+        "Sequentially corrects previous errors (boosting), often reaching high accuracy",
+        "Handles complex non-linear patterns well"
+      ],
+      "limitations": [
+        "More sensitive to hyperparameters and can overfit without tuning",
+        "Slower to train than a single model"
+      ]
+    },
+    {
+      "model_name": "voting_ensemble",
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "confusion_matrix": [
+        [
+          4208,
+          0
+        ],
+        [
+          0,
+          3916
+        ]
+      ],
+      "gains": [
+        "Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot",
+        "Averaging predicted probabilities tends to reduce variance"
+      ],
+      "limitations": [
+        "Costs roughly 3x the inference time of a single model",
+        "Inherits shared bias if the underlying models agree for the same wrong reason"
+      ]
+    }
+  ],
+  "best_model_name": "logistic_regression",
+  "best_score": 1.0,
+  "baseline_score": 0.9998,
+  "improvement_over_baseline": 0.0002,
+  "final_justification": "logistic_regression was selected as the best model on accuracy (1.0), 0.0 percentage points ahead of the runner-up, random_forest (1.0). It beat the fixed baseline by 0.0002. Strengths: Fast to train and easy to interpret; Performs well when classes are close to linearly separable. Known limitations: Can't capture non-linear relationships on its own.",
+  "fold_scores": {
+    "logistic_regression": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "random_forest": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "gradient_boosting": [
+      1.0,
+      1.0,
+      1.0,
+      0.9987692307692307,
+      1.0
+    ],
+    "voting_ensemble": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "cv_folds_used": 5
+}
+
+=== FINAL JUSTIFICATION ===
+logistic_regression was selected as the best model on accuracy (1.0), 0.0 percentage points ahead of the runner-up, random_forest (1.0). It beat the fixed baseline by 0.0002. Strengths: Fast to train and easy to interpret; Performs well when classes are close to linearly separable. Known limitations: Can't capture non-linear relationships on its own.
+
+=== NARRATION ===
+The data set contains 8,124 observations and 23 features, with two target classes that are balanced. The goal was to build a model that can correctly classify each observation.
+
+Before training, the column “stalk‑root” was filled in where missing values appeared. All 22 categorical columns were transformed into numeric form so that the algorithms could work with them. No other changes were made to the data.
+
+The main performance metric used was accuracy, and a baseline accuracy of 0.9998 was set for comparison. This baseline represents the best score achievable by a simple rule or a very basic model.
+
+Four models were evaluated. Logistic regression, random forest, and a voting ensemble all achieved perfect accuracy of 1.0, with precision, recall, F1, and ROC‑AUC also equal to 1.0. Gradient boosting performed almost as well, with an accuracy of 0.9998, precision of 1.0, recall of 0.9995, F1 of 0.9997, and ROC‑AUC of 1.0.
+
+Logistic regression was chosen as the winner because it matched the highest accuracy of 1.0, tying with the random forest and voting ensemble. It also outperformed the baseline by 0.0002. Logistic regression is quick to train and easy to understand, especially when the data can be separated by a straight line. Its main drawback is that it cannot model complex, non‑linear patterns on its own.
+
+Saved as run #12

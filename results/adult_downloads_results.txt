@@ -1,0 +1,190 @@
+Loaded 48842 rows, 15 columns from /Users/tanishkadhaka/Downloads/adult.csv
+Target column: 'income'
+Target value counts:
+income
+<=50K    37155
+>50K     11687
+Name: count, dtype: int64
+
+
+=== PROFILE ===
+48842 rows, 15 cols, 2 classes, imbalanced=True
+
+=== PREPROCESSING STEP TRACE ===
+- [age] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [workclass] 9 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [fnlwgt] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [education] 16 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [educational-num] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [marital-status] 7 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [occupation] 15 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [relationship] 6 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [race] 5 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [gender] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [capital-gain] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [capital-loss] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [hours-per-week] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [native-country] 42 unique categories is high-cardinality — one-hot encoding would explode the feature space, so frequency encoding is used instead.
+
+=== MODEL SELECTION (running 4 models, this may take a while) ===
+{
+  "metric_used": "f1",
+  "dropped_columns": [],
+  "candidate_results": [
+    {
+      "model_name": "logistic_regression",
+      "accuracy": 0.8093444166905532,
+      "precision": 0.5682118444482739,
+      "recall": 0.8464105416274493,
+      "f1": 0.6799560076986527,
+      "roc_auc": 0.9064388443386233,
+      "confusion_matrix": [
+        [
+          29638,
+          7517
+        ],
+        [
+          1795,
+          9892
+        ]
+      ],
+      "gains": [
+        "Fast to train and easy to interpret",
+        "Performs well when classes are close to linearly separable"
+      ],
+      "limitations": [
+        "Can't capture non-linear relationships on its own"
+      ]
+    },
+    {
+      "model_name": "random_forest",
+      "accuracy": 0.8418164694320462,
+      "precision": 0.6492576682493029,
+      "recall": 0.7371438350303756,
+      "f1": 0.6904151306299087,
+      "roc_auc": 0.903607145408043,
+      "confusion_matrix": [
+        [
+          32501,
+          4654
+        ],
+        [
+          3072,
+          8615
+        ]
+      ],
+      "gains": [
+        "Robust to noise via averaging many trees (bagging)",
+        "Handles non-linear patterns and feature interactions well"
+      ],
+      "limitations": [
+        "Can be outperformed by simpler models when the true relationship is close to linear",
+        "Less interpretable than a single tree or linear model"
+      ]
+    },
+    {
+      "model_name": "gradient_boosting",
+      "accuracy": 0.8682076901027804,
+      "precision": 0.7934272300469484,
+      "recall": 0.60734149054505,
+      "f1": 0.688024039160568,
+      "roc_auc": 0.9214428150985301,
+      "confusion_matrix": [
+        [
+          35307,
+          1848
+        ],
+        [
+          4589,
+          7098
+        ]
+      ],
+      "gains": [
+        "Sequentially corrects previous errors (boosting), often reaching high accuracy",
+        "Handles complex non-linear patterns well"
+      ],
+      "limitations": [
+        "More sensitive to hyperparameters and can overfit without tuning",
+        "Slower to train than a single model"
+      ]
+    },
+    {
+      "model_name": "voting_ensemble",
+      "accuracy": 0.8543057204864666,
+      "precision": 0.676527380860431,
+      "recall": 0.7494652177633268,
+      "f1": 0.7111309572136072,
+      "roc_auc": 0.918577932178115,
+      "confusion_matrix": [
+        [
+          32967,
+          4188
+        ],
+        [
+          2928,
+          8759
+        ]
+      ],
+      "gains": [
+        "Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot",
+        "Averaging predicted probabilities tends to reduce variance"
+      ],
+      "limitations": [
+        "Costs roughly 3x the inference time of a single model",
+        "Inherits shared bias if the underlying models agree for the same wrong reason"
+      ]
+    }
+  ],
+  "best_model_name": "voting_ensemble",
+  "best_score": 0.7111,
+  "baseline_score": 0.6605,
+  "improvement_over_baseline": 0.0506,
+  "final_justification": "voting_ensemble was selected as the best model on f1 (0.7111), 2.07 percentage points ahead of the runner-up, random_forest (0.6904). It beat the fixed baseline by 0.0506. Strengths: Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot; Averaging predicted probabilities tends to reduce variance. Known limitations: Costs roughly 3x the inference time of a single model; Inherits shared bias if the underlying models agree for the same wrong reason.",
+  "fold_scores": {
+    "logistic_regression": [
+      0.6789085292603398,
+      0.6761383087983567,
+      0.678596008258775,
+      0.6891137473831124,
+      0.6772055073941866
+    ],
+    "random_forest": [
+      0.6847716757191712,
+      0.6951807228915663,
+      0.6928599920223375,
+      0.6977589339794065,
+      0.6816196903533148
+    ],
+    "gradient_boosting": [
+      0.6803179956636954,
+      0.6953162723322066,
+      0.6942109055969253,
+      0.6841589014222658,
+      0.6860209807270066
+    ],
+    "voting_ensemble": [
+      0.7005902707103603,
+      0.7146904087414002,
+      0.711802748585287,
+      0.717391304347826,
+      0.7112008072653885
+    ]
+  },
+  "cv_folds_used": 5
+}
+
+=== FINAL JUSTIFICATION ===
+voting_ensemble was selected as the best model on f1 (0.7111), 2.07 percentage points ahead of the runner-up, random_forest (0.6904). It beat the fixed baseline by 0.0506. Strengths: Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot; Averaging predicted probabilities tends to reduce variance. Known limitations: Costs roughly 3x the inference time of a single model; Inherits shared bias if the underlying models agree for the same wrong reason.
+
+=== NARRATION ===
+The data set contains 48,842 rows and 15 columns, with two target classes that are imbalanced.  
+
+We encoded eight categorical columns—workclass, education, marital‑status, occupation, relationship, race, gender, and native‑country—using one‑hot encoding. Six numeric columns were prepared for scaling, though the exact scaler is not specified.  
+
+Model performance was measured with the F1 score. Logistic regression achieved an F1 of 0.68, random forest 0.6904, gradient boosting 0.688, and a voting ensemble 0.7111. Accuracy, precision, recall, and ROC‑AUC values were also recorded, showing that the voting ensemble had the highest F1 and a strong ROC‑AUC of 0.9186.  
+
+The baseline F1 score was 0.6605. The voting ensemble improved this by 0.0506, making it the best model overall. It outperformed the next best, random forest, by 2.07 percentage points on F1.  
+
+The chosen model is a voting ensemble that combines a linear model with two ensemble methods. This combination reduces the chance that a single model’s blind spot will dominate predictions, and averaging probabilities tends to lower variance. However, it takes roughly three times longer to run than a single model and can still share biases if all underlying models make the same wrong prediction.
+
+Saved as run #14

@@ -1,7 +1,8 @@
 """
 DataNarrate — Streamlit UI
-Upload a dataset, pick the target column, and watch the full pipeline run:
-profile -> preprocessing decisions -> model comparison -> narration.
+Upload a dataset, pick ANY column as the target, and watch the full pipeline
+run: target preparation -> profile -> preprocessing decisions -> model
+comparison -> narration.
 """
 import streamlit as st
 import pandas as pd
@@ -14,6 +15,7 @@ from src.model_selector import ModelSelector, InsufficientDataError
 from src.narrator import Narrator
 from src.storage import RunStorage
 from src.significance import paired_significance_test
+from src.target_preparer import prepare_target, InvalidTargetError
 
 st.set_page_config(page_title="DataNarrate", page_icon="🧠", layout="wide")
 
@@ -44,7 +46,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<p class="main-header">🧠 DataNarrate</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtext">Upload a classification dataset. See exactly what it decides — and why.</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtext">Upload a dataset. Pick what to predict. See exactly what it decides — and why.</p>', unsafe_allow_html=True)
 st.divider()
 
 uploaded_file = st.file_uploader("Upload a CSV file (up to 1GB)", type=["csv"])
@@ -64,7 +66,11 @@ if uploaded_file is not None:
     with st.expander("Preview data"):
         st.dataframe(df.head(20), width="stretch")
 
-    target_column = st.selectbox("Select the target (label) column", df.columns)
+    target_column = st.selectbox(
+        "Select the target column (what you want to predict — usually the last column)",
+        df.columns,
+        index=len(df.columns) - 1,
+    )
 
     if df.shape[0] > 10000:
         sample_mode = st.checkbox(
@@ -80,10 +86,23 @@ if uploaded_file is not None:
     if run:
         run_df = df.sample(n=10000, random_state=42) if sample_mode else df
 
+        try:
+            run_df, target_notes = prepare_target(run_df, target_column)
+        except InvalidTargetError as e:
+            st.error(f"Can't use '{target_column}' as the target: {e}")
+            st.stop()
+
+        with st.expander("🎯 How the target column was prepared", expanded=True):
+            for note in target_notes:
+                st.write("•", note)
+
         with st.spinner("Profiling dataset..."):
             profile = DataProfiler(run_df, target_column=target_column).profile()
         with st.spinner("Deciding preprocessing steps..."):
             plan = PreprocessingDecider(profile).decide()
+
+        plan.summary = [f"Target preparation: {n}" for n in target_notes] + plan.summary
+        plan.step_trace = [f"[target: {target_column}] {n}" for n in target_notes] + plan.step_trace
 
         try:
             with st.spinner("Comparing 4 models — this takes a minute or two..."):
@@ -105,7 +124,7 @@ if uploaded_file is not None:
 
         storage = RunStorage()
         run_id = storage.save_run(
-            f"{uploaded_file.name} (10k sample)" if sample_mode else uploaded_file.name,
+            f"{uploaded_file.name} -> {target_column}" + (" (10k sample)" if sample_mode else ""),
             profile, plan, result, narration,
         )
 
@@ -161,10 +180,11 @@ if uploaded_file is not None:
             fig2 = go.Figure()
             for name, scores in result.fold_scores.items():
                 fig2.add_trace(go.Box(y=scores, name=name))
-            fig2.update_layout(title="Per-fold score spread (5-fold CV)", template="plotly_dark")
+            fig2.update_layout(title="Per-fold score spread (cross-validation)", template="plotly_dark")
             st.plotly_chart(fig2, width="stretch", key="fold_spread_boxplot")
 
         with tabs[3]:
+            st.caption("Axes show class numbers. See 'Class order' under 'How the target column was prepared' for what each number means.")
             cols = st.columns(2)
             for i, r in enumerate(result.candidate_results):
                 with cols[i % 2]:

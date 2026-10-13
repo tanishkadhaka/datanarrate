@@ -2,9 +2,9 @@
 CLI pipeline runner. Usage:
     python run_pipeline.py <path_to_csv> <target_column>
 
-Prints the full pipeline output to the console — profile, preprocessing
-steps, model comparison, confusion matrices, and narration — without
-touching Streamlit. Useful for quickly checking any dataset.
+Prepares the target column (binning, rare-class merging, leakage check),
+then prints the full pipeline output to the console. Runs on the full
+dataset, so large files take a while.
 """
 import sys
 import json
@@ -15,6 +15,7 @@ from src.preprocessor import PreprocessingDecider
 from src.model_selector import ModelSelector, InsufficientDataError
 from src.narrator import Narrator
 from src.storage import RunStorage
+from src.target_preparer import prepare_target, InvalidTargetError
 
 
 def main():
@@ -23,27 +24,41 @@ def main():
         sys.exit(1)
 
     csv_path, target_column = sys.argv[1], sys.argv[2]
+
     df = pd.read_csv(csv_path)
     print(f"Loaded {df.shape[0]} rows, {df.shape[1]} columns from {csv_path}")
-    print(f"Target column: '{target_column}'")
-    print(f"Target value counts:\n{df[target_column].value_counts()}\n")
 
     if target_column not in df.columns:
         print(f"ERROR: '{target_column}' not found. Available columns: {df.columns.tolist()}")
         sys.exit(1)
 
+    print(f"Target column: '{target_column}'")
+    print(f"Raw target value counts (top 15):\n{df[target_column].value_counts().head(15)}\n")
+
+    try:
+        df, target_notes = prepare_target(df, target_column)
+    except InvalidTargetError as e:
+        print(f"ERROR: can't use '{target_column}' as the target: {e}")
+        sys.exit(1)
+
+    print("=== TARGET PREPARATION ===")
+    for note in target_notes:
+        print("-", note)
+
     profile = DataProfiler(df, target_column=target_column).profile()
-    print(f"\n=== PROFILE ===")
+    print("\n=== PROFILE ===")
     print(f"{profile.n_rows} rows, {profile.n_cols} cols, "
           f"{profile.n_classes} classes, imbalanced={profile.is_imbalanced}")
 
     plan = PreprocessingDecider(profile).decide()
-    print(f"\n=== PREPROCESSING STEP TRACE ===")
+    plan.summary = [f"Target preparation: {n}" for n in target_notes] + plan.summary
+
+    print("\n=== PREPROCESSING STEP TRACE ===")
     for step in plan.step_trace:
         print("-", step)
 
     try:
-        print(f"\n=== MODEL SELECTION (running 4 models, this may take a while) ===")
+        print("\n=== MODEL SELECTION (running 4 models, this may take a while) ===")
         result = ModelSelector(df, profile, plan).select()
     except InsufficientDataError as e:
         print(f"ERROR: {e}")
@@ -54,15 +69,15 @@ def main():
 
     print(json.dumps(result.to_dict(), indent=2))
 
-    print(f"\n=== FINAL JUSTIFICATION ===")
+    print("\n=== FINAL JUSTIFICATION ===")
     print(result.final_justification)
 
-    print(f"\n=== NARRATION ===")
+    print("\n=== NARRATION ===")
     narration = Narrator().narrate(profile, plan, result)
     print(narration)
 
     storage = RunStorage()
-    run_id = storage.save_run(csv_path, profile, plan, result, narration)
+    run_id = storage.save_run(f"{csv_path} -> {target_column}", profile, plan, result, narration)
     print(f"\nSaved as run #{run_id}")
 
 

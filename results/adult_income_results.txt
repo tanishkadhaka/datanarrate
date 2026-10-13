@@ -1,0 +1,191 @@
+Loaded 48842 rows, 15 columns from adult_income.csv
+Target column: 'class'
+Target value counts:
+class
+<=50K    37155
+>50K     11687
+Name: count, dtype: int64
+
+
+=== PROFILE ===
+48842 rows, 15 cols, 2 classes, imbalanced=True
+
+=== PREPROCESSING STEP TRACE ===
+- [age] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [workclass] 5.73% missing — imputing with the most frequent category keeps the row without inventing a numeric value.
+- [workclass] 8 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [fnlwgt] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [education] 16 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [education-num] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [marital-status] 7 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [occupation] 5.75% missing — imputing with the most frequent category keeps the row without inventing a numeric value.
+- [occupation] 14 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [relationship] 6 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [race] 5 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [sex] 2 unique categories is low enough for one-hot encoding without blowing up dimensionality.
+- [capital-gain] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [capital-loss] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [hours-per-week] Numeric column — standardized so distance- and gradient-based models aren't dominated by columns with larger raw scales.
+- [native-country] 1.75% missing — imputing with the most frequent category keeps the row without inventing a numeric value.
+- [native-country] 41 unique categories is high-cardinality — one-hot encoding would explode the feature space, so frequency encoding is used instead.
+
+=== MODEL SELECTION (running 4 models, this may take a while) ===
+{
+  "metric_used": "f1",
+  "dropped_columns": [],
+  "candidate_results": [
+    {
+      "model_name": "logistic_regression",
+      "accuracy": 0.8069284632078948,
+      "precision": 0.5642690358220855,
+      "recall": 0.8477795841533328,
+      "f1": 0.6775627436230596,
+      "roc_auc": 0.9049615298198145,
+      "confusion_matrix": [
+        [
+          29504,
+          7651
+        ],
+        [
+          1779,
+          9908
+        ]
+      ],
+      "gains": [
+        "Fast to train and easy to interpret",
+        "Performs well when classes are close to linearly separable"
+      ],
+      "limitations": [
+        "Can't capture non-linear relationships on its own"
+      ]
+    },
+    {
+      "model_name": "random_forest",
+      "accuracy": 0.8427582818066418,
+      "precision": 0.6513103239936561,
+      "recall": 0.7379139214511851,
+      "f1": 0.6919127086007703,
+      "roc_auc": 0.9029828686486625,
+      "confusion_matrix": [
+        [
+          32538,
+          4617
+        ],
+        [
+          3063,
+          8624
+        ]
+      ],
+      "gains": [
+        "Robust to noise via averaging many trees (bagging)",
+        "Handles non-linear patterns and feature interactions well"
+      ],
+      "limitations": [
+        "Can be outperformed by simpler models when the true relationship is close to linear",
+        "Less interpretable than a single tree or linear model"
+      ]
+    },
+    {
+      "model_name": "gradient_boosting",
+      "accuracy": 0.8665492813562098,
+      "precision": 0.7911456573166611,
+      "recall": 0.6009241037049713,
+      "f1": 0.6830383193931142,
+      "roc_auc": 0.9208974676202201,
+      "confusion_matrix": [
+        [
+          35301,
+          1854
+        ],
+        [
+          4664,
+          7023
+        ]
+      ],
+      "gains": [
+        "Sequentially corrects previous errors (boosting), often reaching high accuracy",
+        "Handles complex non-linear patterns well"
+      ],
+      "limitations": [
+        "More sensitive to hyperparameters and can overfit without tuning",
+        "Slower to train than a single model"
+      ]
+    },
+    {
+      "model_name": "voting_ensemble",
+      "accuracy": 0.8539371852094508,
+      "precision": 0.6754527938342967,
+      "recall": 0.7498930435526654,
+      "f1": 0.710729056848593,
+      "roc_auc": 0.917843497330686,
+      "confusion_matrix": [
+        [
+          32944,
+          4211
+        ],
+        [
+          2923,
+          8764
+        ]
+      ],
+      "gains": [
+        "Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot",
+        "Averaging predicted probabilities tends to reduce variance"
+      ],
+      "limitations": [
+        "Costs roughly 3x the inference time of a single model",
+        "Inherits shared bias if the underlying models agree for the same wrong reason"
+      ]
+    }
+  ],
+  "best_model_name": "voting_ensemble",
+  "best_score": 0.7107,
+  "baseline_score": 0.6568,
+  "improvement_over_baseline": 0.0539,
+  "final_justification": "voting_ensemble was selected as the best model on f1 (0.7107), 1.88 percentage points ahead of the runner-up, random_forest (0.6919). It beat the fixed baseline by 0.0539. Strengths: Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot; Averaging predicted probabilities tends to reduce variance. Known limitations: Costs roughly 3x the inference time of a single model; Inherits shared bias if the underlying models agree for the same wrong reason.",
+  "fold_scores": {
+    "logistic_regression": [
+      0.6781628820215128,
+      0.6729099267835859,
+      0.6755555555555556,
+      0.6857738405419489,
+      0.6755796243019123
+    ],
+    "random_forest": [
+      0.6825236847409797,
+      0.7004626835646751,
+      0.6932112283495919,
+      0.6969022069244787,
+      0.6865315852205006
+    ],
+    "gradient_boosting": [
+      0.6801932367149759,
+      0.6941829592083032,
+      0.6873035066505442,
+      0.675848499754058,
+      0.6774509803921569
+    ],
+    "voting_ensemble": [
+      0.6983285772523441,
+      0.7169659067984668,
+      0.7113714401131085,
+      0.7166257166257166,
+      0.7103142626913779
+    ]
+  },
+  "cv_folds_used": 5
+}
+
+=== FINAL JUSTIFICATION ===
+voting_ensemble was selected as the best model on f1 (0.7107), 1.88 percentage points ahead of the runner-up, random_forest (0.6919). It beat the fixed baseline by 0.0539. Strengths: Combines a linear model with two different ensemble strategies, reducing the risk of any single model's blind spot; Averaging predicted probabilities tends to reduce variance. Known limitations: Costs roughly 3x the inference time of a single model; Inherits shared bias if the underlying models agree for the same wrong reason.
+
+=== NARRATION ===
+The data set contains 48,842 rows and 15 columns, with two target classes that are not evenly distributed. To clean the data, missing values in three columns—workclass, occupation, and native‑country—were filled in. Eight columns that describe categories were turned into numeric form so the models could use them, and six columns that hold numbers were prepared for scaling.
+
+The goal of the modeling was to maximize the F1 score, a metric that balances precision and recall. A baseline model achieved an F1 of 0.6568, which gives a reference point for how much improvement is needed.
+
+Four different approaches were tested. Logistic regression scored an F1 of 0.6776, random forest 0.6919, gradient boosting 0.683, and a voting ensemble that combined a linear model with two ensemble methods reached 0.7107. The ensemble also had the highest accuracy (0.8539) and a strong ROC‑AUC of 0.9178.
+
+Because the voting ensemble’s F1 was 1.88 percentage points higher than the next best model (random forest) and it beat the baseline by 0.0539, it was chosen as the winner. The ensemble’s design helps reduce the chance that a single model’s mistake dominates the prediction, but it does take about three times longer to run than a single model and can still share biases if all its parts make the same wrong decision.
+
+Saved as run #13
