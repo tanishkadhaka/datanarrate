@@ -1,17 +1,15 @@
 """
 Module 3 — Model Selection
-Cross-validates 4 candidate classifiers — a linear model, a bagging
-ensemble, a boosting ensemble, and an explicit voting ensemble combining
-all three — reports a full metric suite and confusion matrix for each,
-explains each model's gains/limitations against the actual measured
-numbers, keeps per-fold scores for significance testing, and compares
-the winner against a fixed baseline pipeline. Fits each model once per
-fold (not twice), parallelizes tree-based models, and automatically
-adapts the number of CV folds to the smallest class.
+Cross-validates 4 candidate classifiers, reports a full metric suite and a
+confusion matrix for each, explains each model's gains and limitations, and
+compares the winner with a fixed baseline. The baseline is fully described
+(what it does, why it was chosen, how it differs from DataNarrate) and an
+"improvement ladder" splits the gap into class balancing, preprocessing and
+model choice.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -65,6 +63,24 @@ class ModelMetrics:
 
 
 @dataclass
+class LadderStep:
+    label: str
+    score: float
+    what_changed: str
+
+
+@dataclass
+class BaselineInfo:
+    model: str
+    metric: str
+    score: float
+    summary: str
+    steps: List[Dict[str, str]]
+    why_chosen: List[str]
+    caveats: List[str]
+
+
+@dataclass
 class SelectionResult:
     metric_used: str
     dropped_columns: List[str]
@@ -76,6 +92,8 @@ class SelectionResult:
     final_justification: str = ""
     fold_scores: Dict[str, List[float]] = field(default_factory=dict)
     cv_folds_used: int = 5
+    baseline_info: Optional[BaselineInfo] = None
+    ladder: List[LadderStep] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -89,6 +107,8 @@ class SelectionResult:
             "final_justification": self.final_justification,
             "fold_scores": self.fold_scores,
             "cv_folds_used": self.cv_folds_used,
+            "baseline_info": asdict(self.baseline_info) if self.baseline_info is not None else None,
+            "ladder": [vars(s) for s in self.ladder],
         }
 
 
@@ -125,6 +145,134 @@ MODEL_NOTES = {
 }
 
 
+def build_decided_preprocessor(plan: PreprocessingPlan, X: pd.DataFrame) -> ColumnTransformer:
+    """Builds the preprocessing exactly as Module 2 decided it, column by column."""
+    decisions = {d.column: d for d in plan.column_decisions if d.column in X.columns}
+    numeric_cols = [c for c, d in decisions.items() if d.scaling_action == "standard_scale"]
+    onehot_cols = [c for c, d in decisions.items() if d.encoding_action == "one_hot"]
+    freq_cols = [c for c, d in decisions.items() if d.encoding_action == "frequency_encode"]
+
+    transformers = []
+    if numeric_cols:
+        transformers.append(("numeric", Pipeline([
+            ("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
+        ]), numeric_cols))
+    if onehot_cols:
+        transformers.append(("onehot", Pipeline([
+            ("impute", SimpleImputer(strategy="most_frequent")),
+            ("encode", OneHotEncoder(handle_unknown="ignore")),
+        ]), onehot_cols))
+    if freq_cols:
+        transformers.append(("freq", Pipeline([
+            ("impute", SimpleImputer(strategy="most_frequent")), ("encode", FrequencyEncoder()),
+        ]), freq_cols))
+    return ColumnTransformer(transformers, remainder="drop")
+
+
+def _build_naive_pipeline(X_full: pd.DataFrame, class_weight=None) -> Pipeline:
+    """The fixed baseline recipe. It never looks at the data to decide anything."""
+    numeric_cols = X_full.select_dtypes(include="number").columns.tolist()
+    categorical_cols = X_full.select_dtypes(exclude="number").columns.tolist()
+    transformers = []
+    if numeric_cols:
+        transformers.append(("numeric", Pipeline([
+            ("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
+        ]), numeric_cols))
+    if categorical_cols:
+        transformers.append(("categorical", Pipeline([
+            ("impute", SimpleImputer(strategy="most_frequent")),
+            ("encode", OneHotEncoder(handle_unknown="ignore")),
+        ]), categorical_cols))
+    return Pipeline([
+        ("preprocess", ColumnTransformer(transformers, remainder="drop")),
+        ("model", LogisticRegression(max_iter=2000, class_weight=class_weight)),
+    ])
+
+
+def _cv_score(pipe, X, y, cv, metric: str, is_binary: bool) -> float:
+    y_pred = cross_val_predict(pipe, X, y, cv=cv)
+    if metric == "accuracy":
+        return float(accuracy_score(y, y_pred))
+    return float(f1_score(y, y_pred, average="binary" if is_binary else "macro", zero_division=0))
+
+
+def _names(cols: List[str], limit: int = 6) -> str:
+    if len(cols) <= limit:
+        return ", ".join(cols)
+    return ", ".join(cols[:limit]) + f" (+{len(cols) - limit} more)"
+
+
+def _describe_baseline(plan: PreprocessingPlan, metric_used: str, score: float) -> BaselineInfo:
+    decisions = plan.column_decisions
+    ids = [d.column for d in decisions if any("identifier" in r for r in d.reasons)]
+    heavy_missing = [d.column for d in decisions if d.missing_action == "drop_column" and d.column not in ids]
+    num_imputed = [d.column for d in decisions if d.missing_action == "impute_median"]
+    cat_imputed = [d.column for d in decisions if d.missing_action == "impute_mode"]
+    onehot = [d.column for d in decisions if d.encoding_action == "one_hot"]
+    freq = [d.column for d in decisions if d.encoding_action == "frequency_encode"]
+
+    base_key = "Baseline (fixed recipe)"
+    dn_key = "DataNarrate (decided from the data)"
+
+    steps = [
+        {"Stage": "Identifier-like columns",
+         base_key: "Kept, and one-hot encoded like any other text column",
+         dn_key: f"Dropped: {_names(ids)}" if ids else "None found, nothing dropped"},
+        {"Stage": "Columns with 40% or more missing",
+         base_key: "Kept and filled in",
+         dn_key: f"Dropped: {_names(heavy_missing)}" if heavy_missing else "None found, nothing dropped"},
+        {"Stage": "Missing numbers (under 40%)",
+         base_key: "Filled with the column median",
+         dn_key: f"Same: median ({len(num_imputed)} column(s) needed it)"},
+        {"Stage": "Missing categories (under 40%)",
+         base_key: "Filled with the most frequent category",
+         dn_key: f"Same: most frequent category ({len(cat_imputed)} column(s) needed it)"},
+        {"Stage": "Categorical encoding",
+         base_key: "One-hot encode every categorical column, however many categories it has",
+         dn_key: f"One-hot for {len(onehot)} column(s)"
+                 + (f"; frequency encoding for {len(freq)} high-cardinality column(s): {_names(freq)}" if freq else "")},
+        {"Stage": "Numeric scaling",
+         base_key: "Standardize every numeric column",
+         dn_key: "Same: standardize every numeric column"},
+        {"Stage": "Class imbalance",
+         base_key: "Ignored: every row counts equally",
+         dn_key: "Logistic regression and random forest are trained with balanced class weights"},
+        {"Stage": "Model",
+         base_key: "Logistic regression only",
+         dn_key: "Compares 4 models (logistic regression, random forest, gradient boosting, voting ensemble) and keeps the best"},
+    ]
+
+    summary = (
+        "Logistic regression with default settings and no class weighting, trained on a fixed preprocessing "
+        "recipe that never looks at the data: numeric columns are filled with the median and standardized, "
+        "every categorical column is filled with its most frequent value and one-hot encoded, and no column "
+        f"is ever removed. It is scored with the same cross-validation folds and the same metric ({metric_used}) "
+        "as every candidate model."
+    )
+
+    why_chosen = [
+        "It represents what a practitioner would do with no analysis: apply the same standard recipe to any dataset. If DataNarrate cannot beat that, the analysis added nothing.",
+        "Logistic regression is the usual first model for classification. It is fast, deterministic and widely used as a reference point.",
+        "It is not a strawman. It has sensible defaults (it fills missing values, scales numbers and encodes text), so it never crashes on messy data.",
+        "It uses exactly the same rows, cross-validation folds and metric as every candidate, so the comparison is like for like.",
+    ]
+
+    caveats = [
+        "The baseline and DataNarrate differ in several ways at once, so the gap is a bundle of effects. "
+        "The improvement ladder separates them one change at a time.",
+    ]
+    if ids:
+        caveats.append(
+            f"The baseline one-hot encodes identifier-like columns ({_names(ids)}), which gives it many useless "
+            f"features. Part of the gap comes from DataNarrate removing them."
+        )
+
+    return BaselineInfo(
+        model="logistic_regression", metric=metric_used, score=float(score),
+        summary=summary, steps=steps, why_chosen=why_chosen, caveats=caveats,
+    )
+
+
 class ModelSelector:
     def __init__(self, df: pd.DataFrame, profile: DatasetProfile, plan: PreprocessingPlan):
         self.df = df
@@ -157,11 +305,12 @@ class ModelSelector:
         scorer_name = "accuracy" if metric_used == "accuracy" else ("f1" if is_binary else "f1_macro")
         scorer = get_scorer(scorer_name)
 
-        preprocessor = self._build_decided_preprocessor(X)
+        preprocessor = build_decided_preprocessor(self.plan, X)
         cv = StratifiedKFold(n_splits=effective_cv_folds, shuffle=True, random_state=random_state)
 
         candidate_results = []
         fold_scores = {}
+        model_scores = {}
         best_name, best_score = None, -np.inf
 
         for name, model in _build_candidates().items():
@@ -194,6 +343,7 @@ class ModelSelector:
             cm = confusion_matrix(y, y_pred).tolist()
 
             score = {"accuracy": acc, "f1": f1}[metric_used]
+            model_scores[name] = float(score)
             notes = MODEL_NOTES.get(name, {"gains": [], "limitations": []})
 
             candidate_results.append(ModelMetrics(
@@ -204,7 +354,25 @@ class ModelSelector:
             if score > best_score:
                 best_name, best_score = name, score
 
-        baseline_score = self._run_baseline(X_full, y, metric_used, cv, is_binary)
+        baseline_score = _cv_score(_build_naive_pipeline(X_full, None), X_full, y, cv, metric_used, is_binary)
+        balanced_baseline_score = _cv_score(
+            _build_naive_pipeline(X_full, "balanced"), X_full, y, cv, metric_used, is_binary
+        )
+
+        best_is_lr = best_name == "logistic_regression"
+        ladder = [
+            LadderStep("Fixed baseline", baseline_score,
+                       "Logistic regression on the fixed preprocessing recipe"),
+            LadderStep("+ class balancing", balanced_baseline_score,
+                       "Same recipe and model, but the minority class is weighted up so it counts more"),
+            LadderStep("+ DataNarrate preprocessing", model_scores["logistic_regression"],
+                       "Same model, but preprocessing is decided from the data instead of the fixed recipe"),
+            LadderStep("+ best model chosen", float(best_score),
+                       "Logistic regression was already the best model, so nothing changes" if best_is_lr
+                       else f"Switched from logistic regression to {best_name}"),
+        ]
+
+        baseline_info = _describe_baseline(self.plan, metric_used, baseline_score)
         justification = self._build_justification(candidate_results, best_name, metric_used, baseline_score)
 
         return SelectionResult(
@@ -213,7 +381,7 @@ class ModelSelector:
             best_score=float(best_score), baseline_score=float(baseline_score),
             improvement_over_baseline=float(best_score - baseline_score),
             final_justification=justification, fold_scores=fold_scores,
-            cv_folds_used=effective_cv_folds,
+            cv_folds_used=effective_cv_folds, baseline_info=baseline_info, ladder=ladder,
         )
 
     def _build_justification(self, results, best_name, metric, baseline) -> str:
@@ -225,51 +393,8 @@ class ModelSelector:
         return (
             f"{best_name} was selected as the best model on {metric} ({round(best_val, 4)}), "
             f"{gap} percentage points ahead of the runner-up, {runner_up.model_name} "
-            f"({round(getattr(runner_up, metric), 4)}). It beat the fixed baseline by "
-            f"{round(best_val - baseline, 4)}. Strengths: {'; '.join(best.gains) or 'none noted'}. "
+            f"({round(getattr(runner_up, metric), 4)}). Compared with the fixed baseline "
+            f"(logistic regression on a fixed preprocessing recipe, {round(baseline, 4)}), the score changed by "
+            f"{best_val - baseline:+.4f}. Strengths: {'; '.join(best.gains) or 'none noted'}. "
             f"Known limitations: {'; '.join(best.limitations) or 'none noted'}."
         )
-
-    def _build_decided_preprocessor(self, X: pd.DataFrame) -> ColumnTransformer:
-        decisions = {d.column: d for d in self.plan.column_decisions if d.column in X.columns}
-        numeric_cols = [c for c, d in decisions.items() if d.scaling_action == "standard_scale"]
-        onehot_cols = [c for c, d in decisions.items() if d.encoding_action == "one_hot"]
-        freq_cols = [c for c, d in decisions.items() if d.encoding_action == "frequency_encode"]
-
-        transformers = []
-        if numeric_cols:
-            transformers.append(("numeric", Pipeline([
-                ("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
-            ]), numeric_cols))
-        if onehot_cols:
-            transformers.append(("onehot", Pipeline([
-                ("impute", SimpleImputer(strategy="most_frequent")),
-                ("encode", OneHotEncoder(handle_unknown="ignore")),
-            ]), onehot_cols))
-        if freq_cols:
-            transformers.append(("freq", Pipeline([
-                ("impute", SimpleImputer(strategy="most_frequent")), ("encode", FrequencyEncoder()),
-            ]), freq_cols))
-        return ColumnTransformer(transformers, remainder="drop")
-
-    def _run_baseline(self, X_full, y, metric, cv, is_binary) -> float:
-        numeric_cols = X_full.select_dtypes(include="number").columns.tolist()
-        categorical_cols = X_full.select_dtypes(exclude="number").columns.tolist()
-        transformers = []
-        if numeric_cols:
-            transformers.append(("numeric", Pipeline([
-                ("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
-            ]), numeric_cols))
-        if categorical_cols:
-            transformers.append(("categorical", Pipeline([
-                ("impute", SimpleImputer(strategy="most_frequent")),
-                ("encode", OneHotEncoder(handle_unknown="ignore")),
-            ]), categorical_cols))
-        baseline_pipe = Pipeline([
-            ("preprocess", ColumnTransformer(transformers, remainder="drop")),
-            ("model", LogisticRegression(max_iter=1000)),
-        ])
-        y_pred = cross_val_predict(baseline_pipe, X_full, y, cv=cv)
-        if metric == "accuracy":
-            return accuracy_score(y, y_pred)
-        return f1_score(y, y_pred, average="binary" if is_binary else "macro", zero_division=0)

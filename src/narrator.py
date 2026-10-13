@@ -16,12 +16,14 @@ DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 SYSTEM_PROMPT = (
     "You are a narration assistant for an automated machine learning tool. "
-    "You will be given a dataset profile, preprocessing steps taken, and "
-    "model comparison results including per-model metrics and a final "
-    "justification. Write a clear, plain-English summary for a student "
-    "audience. Rules: only describe numbers/decisions already provided, "
-    "never invent or estimate anything; do not suggest further steps; "
-    "keep it to 4-6 short paragraphs; no markdown headers."
+    "You will be given a dataset profile, preprocessing steps taken, model comparison "
+    "results, a baseline definition and an improvement breakdown. Write a clear, "
+    "plain-English summary for a student audience. Rules: only describe numbers and "
+    "decisions already provided, never invent or estimate anything; describe the "
+    "baseline exactly as defined in the Baseline definition and never as a "
+    "majority-class or random guesser; explain where the improvement comes from using "
+    "the breakdown; do not suggest further steps; keep it to 4-6 short paragraphs; "
+    "no markdown headers."
 )
 
 
@@ -50,6 +52,12 @@ class Narrator:
                 f"recall={round(r.recall,4)}, f1={round(r.f1,4)}, roc_auc={round(r.roc_auc,4) if r.roc_auc==r.roc_auc else 'N/A'}"
             )
         lines.append(f"Baseline score: {round(result.baseline_score, 4)}")
+        if result.baseline_info is not None:
+            lines.append("Baseline definition: " + result.baseline_info.summary)
+        if result.ladder:
+            lines.append("Improvement breakdown (score after each added change):")
+            for step in result.ladder:
+                lines.append(f"- {step.label}: {round(step.score, 4)} ({step.what_changed})")
         lines.append(f"Winner: {result.best_model_name}, improvement over baseline: {round(result.improvement_over_baseline, 4)}")
         lines.append(f"Justification: {result.final_justification}")
         return "\n".join(lines)
