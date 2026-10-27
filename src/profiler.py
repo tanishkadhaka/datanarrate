@@ -4,9 +4,12 @@ Reads a dataset and computes a structured profile of its properties.
 This profile is the single input every later decision (Module 2, Module 3) reads from.
 """
 
+import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+
+from src.outlier import iqr_fences, LOW_PERCENTILE, HIGH_PERCENTILE
 
 
 @dataclass
@@ -16,6 +19,14 @@ class ColumnProfile:
     missing_pct: float
     n_unique: int
     is_high_cardinality: bool
+    # Outlier stats (numeric columns only). Counted among the non-missing values.
+    outlier_count: int = 0
+    outlier_pct: float = 0.0
+    lower_fence: Optional[float] = None
+    upper_fence: Optional[float] = None
+    iqr_is_zero: bool = False
+    p01: Optional[float] = None   # 1st percentile, clip bound when the IQR is 0
+    p99: Optional[float] = None   # 99th percentile
 
 
 @dataclass
@@ -69,12 +80,14 @@ class DataProfiler:
             n_unique = df[col].nunique(dropna=True)
             dtype = self._infer_dtype(df[col])
             is_high_card = dtype == "categorical" and n_unique > HIGH_CARDINALITY_THRESHOLD
+            outlier_stats = self._outlier_stats(df[col]) if dtype == "numeric" else {}
             columns.append(ColumnProfile(
                 name=col,
                 dtype=dtype,
                 missing_pct=missing_pct,
                 n_unique=n_unique,
                 is_high_cardinality=is_high_card,
+                **outlier_stats,
             ))
 
         class_counts = df[target].value_counts(dropna=True)
@@ -98,6 +111,27 @@ class DataProfiler:
         if pd.api.types.is_numeric_dtype(series):
             return "numeric"
         return "categorical"
+
+    @staticmethod
+    def _outlier_stats(series: pd.Series) -> dict:
+        """IQR outlier stats for one numeric column (missing and infinite values ignored)."""
+        values = series.dropna().astype(float).to_numpy()
+        values = values[np.isfinite(values)]
+        if len(values) == 0:
+            return {}
+
+        _, _, iqr, lower, upper = iqr_fences(values)
+        n_outliers = int(((values < lower) | (values > upper)).sum())
+        p01, p99 = np.percentile(values, [LOW_PERCENTILE, HIGH_PERCENTILE])
+        return {
+            "outlier_count": n_outliers,
+            "outlier_pct": round(n_outliers / len(values) * 100, 2),
+            "lower_fence": float(lower),
+            "upper_fence": float(upper),
+            "iqr_is_zero": bool(iqr == 0),
+            "p01": float(p01),
+            "p99": float(p99),
+        }
 
     @staticmethod
     def _check_imbalance(class_counts: pd.Series) -> bool:

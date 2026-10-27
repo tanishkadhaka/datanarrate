@@ -17,6 +17,9 @@ from src.narrator import Narrator
 from src.storage import RunStorage
 from src.significance import paired_significance_test
 from src.target_preparer import prepare_target, InvalidTargetError
+from src.outlier import outlier_rows
+
+MAX_OUTLIER_PLOTS = 8   # box plots shown for clipped columns
 
 st.set_page_config(page_title="DataNarrate", page_icon="🧠", layout="wide")
 
@@ -259,11 +262,12 @@ if uploaded_file is not None:
         ])
 
         with tab_overview:
-            k1, k2, k3, k4 = st.columns(4)
+            k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Classes", profile.n_classes)
             k2.metric("Imbalanced", "Yes" if profile.is_imbalanced else "No")
             k3.metric("Metric used", result.metric_used.upper())
             k4.metric("Columns dropped", len(result.dropped_columns))
+            k5.metric("Columns clipped (outliers)", sum(d.outlier_action == "clip" for d in plan.column_decisions))
 
             st.markdown(
                 f'<div class="winner-banner">🏆 <b>{result.best_model_name}</b> selected — '
@@ -296,6 +300,47 @@ if uploaded_file is not None:
             st.subheader("Summary")
             for s in plan.summary:
                 st.write("•", s)
+
+            st.subheader("Outlier detection (rule R8)")
+            st.info(
+                "An outlier is a value far away from the rest of its column. We call a value an "
+                "outlier if it lies below Q1 − 1.5×IQR or above Q3 + 1.5×IQR (Q1 and Q3 are the "
+                "25th and 75th percentiles, IQR = Q3 − Q1). Outliers are **clipped** to these "
+                "limits instead of deleting the rows, so no training data is lost and the "
+                "extreme values can no longer dominate the scaling. The limits are learned "
+                "from the training part of each cross-validation fold only. If the IQR is 0 "
+                "(most values identical) the 1st and 99th percentiles are used instead."
+            )
+
+            rows = outlier_rows(profile, plan)
+            if rows:
+                outlier_df = pd.DataFrame([
+                    {"Column": r["column"], "Outlier %": r["outlier_pct"],
+                     "Lower fence": None if r["lower_fence"] is None else round(r["lower_fence"], 2),
+                     "Upper fence": None if r["upper_fence"] is None else round(r["upper_fence"], 2),
+                     "Action": r["action"],
+                     "Clipped to": "" if r["action"] == "none" else f"[{round(r['clip_lower'], 2)}, {round(r['clip_upper'], 2)}]",
+                     "Reason": r["reason"]}
+                    for r in rows
+                ])
+                st.dataframe(outlier_df, width="stretch")
+
+                clipped_rows = [r for r in rows if r["action"] == "clip"]
+                if clipped_rows:
+                    st.write("Box plots of the clipped columns (dashed lines = clip limits):")
+                    plot_cols = st.columns(2)
+                    for i, r in enumerate(clipped_rows[:MAX_OUTLIER_PLOTS]):
+                        box = px.box(run_df, y=r["column"], template="plotly_dark")
+                        box.add_hline(y=r["clip_lower"], line_dash="dash", line_color="#00D2D3")
+                        box.add_hline(y=r["clip_upper"], line_dash="dash", line_color="#00D2D3")
+                        box.update_layout(height=320, margin=dict(l=20, r=20, t=30, b=20), title=r["column"])
+                        plot_cols[i % 2].plotly_chart(box, width="stretch", key=f"outlier_box_{r['column']}")
+                    if len(clipped_rows) > MAX_OUTLIER_PLOTS:
+                        st.caption(f"Showing {MAX_OUTLIER_PLOTS} of {len(clipped_rows)} clipped columns.")
+                else:
+                    st.write("No column had enough outliers to be clipped.")
+            else:
+                st.write("This dataset has no numeric feature columns, so outlier handling does not apply.")
 
         with tab_base:
             render_baseline(result)

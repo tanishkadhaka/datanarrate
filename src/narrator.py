@@ -23,8 +23,12 @@ SYSTEM_PROMPT = (
     "baseline exactly as defined in the Baseline definition and never as a "
     "majority-class or random guesser; explain where the improvement comes from using "
     "the breakdown; do not suggest further steps; keep it to 4-6 short paragraphs; "
-    "no markdown headers."
+    "no markdown headers. Mention how outliers were handled (which columns were "
+    "clipped, and how many percent of their values were outliers) if outlier "
+    "information is given."
 )
+
+MAX_OUTLIER_LINES = 10   # keep the prompt short on datasets with many numeric columns
 
 
 class Narrator:
@@ -44,6 +48,8 @@ class Narrator:
         ]
         lines.extend(f"- {s}" for s in plan.summary)
         lines.append("")
+        lines.extend(self._outlier_lines(profile, plan))
+        lines.append("")
         lines.append(f"Metric used: {result.metric_used}")
         lines.append("Model comparison:")
         for r in result.candidate_results:
@@ -61,6 +67,27 @@ class Narrator:
         lines.append(f"Winner: {result.best_model_name}, improvement over baseline: {round(result.improvement_over_baseline, 4)}")
         lines.append(f"Justification: {result.final_justification}")
         return "\n".join(lines)
+
+    def _outlier_lines(self, profile: DatasetProfile, plan: PreprocessingPlan) -> list:
+        """Facts about rule R8 (outlier clipping), one line per clipped column."""
+        pct_of = {c.name: c.outlier_pct for c in profile.columns}
+        clipped = [d for d in plan.column_decisions if d.outlier_action == "clip"]
+        n_numeric = sum(1 for d in plan.column_decisions if d.scaling_action == "standard_scale")
+
+        lines = ["Outlier handling (rule R8, IQR method; rows are never removed, extreme values are clipped):"]
+        for d in clipped[:MAX_OUTLIER_LINES]:
+            how = "1st/99th percentiles because the IQR is 0" if d.outlier_bounds == "percentile" else "IQR fences"
+            lines.append(
+                f"- {d.column}: {pct_of.get(d.column)}% of values were outliers, clipped to "
+                f"[{round(d.clip_lower, 2)}, {round(d.clip_upper, 2)}] using {how}"
+            )
+        if len(clipped) > MAX_OUTLIER_LINES:
+            lines.append(f"- ...and {len(clipped) - MAX_OUTLIER_LINES} more clipped columns")
+        lines.append(
+            f"- {len(clipped)} of {n_numeric} numeric columns were clipped; "
+            f"the rest had too few outliers (under 1%) or no usable range."
+        )
+        return lines
 
     def narrate(self, profile: DatasetProfile, plan: PreprocessingPlan, result: SelectionResult) -> str:
         prompt = self.build_prompt(profile, plan, result)

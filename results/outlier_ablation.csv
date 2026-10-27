@@ -1,0 +1,21 @@
+dataset,n_rows,metric,model,columns_clipped,without_R8,with_R8,difference
+adult,10000,f1,logistic_regression,5,0.6788,0.6766,-0.0021
+adult,10000,f1,random_forest,5,0.6591,0.6634,0.0043
+adult,10000,f1,gradient_boosting,5,0.6892,0.6894,0.0002
+adult,10000,f1,voting_ensemble,5,0.7068,0.7049,-0.0019
+adult,10000,f1,BEST OF 4 MODELS,5,0.7068,0.7049,-0.0019
+telco,7043,f1,logistic_regression,0,0.6259,0.6259,0.0
+telco,7043,f1,random_forest,0,0.5435,0.5435,0.0
+telco,7043,f1,gradient_boosting,0,0.5886,0.5886,0.0
+telco,7043,f1,voting_ensemble,0,0.6184,0.6184,0.0
+telco,7043,f1,BEST OF 4 MODELS,0,0.6259,0.6259,0.0
+mushroom,8124,accuracy,logistic_regression,0,1.0,1.0,0.0
+mushroom,8124,accuracy,random_forest,0,1.0,1.0,0.0
+mushroom,8124,accuracy,gradient_boosting,0,0.9998,0.9998,0.0
+mushroom,8124,accuracy,voting_ensemble,0,1.0,1.0,0.0
+mushroom,8124,accuracy,BEST OF 4 MODELS,0,1.0,1.0,0.0
+breast_cancer,569,accuracy,logistic_regression,28,0.9719,0.9684,-0.0035
+breast_cancer,569,accuracy,random_forest,28,0.9649,0.9649,0.0
+breast_cancer,569,accuracy,gradient_boosting,28,0.9473,0.9455,-0.0018
+breast_cancer,569,accuracy,voting_ensemble,28,0.9719,0.9719,0.0
+breast_cancer,569,accuracy,BEST OF 4 MODELS,28,0.9719,0.9719,0.0

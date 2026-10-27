@@ -28,6 +28,7 @@ from sklearn.metrics import (
 
 from src.profiler import DatasetProfile
 from src.preprocessor import PreprocessingPlan
+from src.outlier import build_clipper
 
 
 class FrequencyEncoder(BaseEstimator, TransformerMixin):
@@ -154,9 +155,14 @@ def build_decided_preprocessor(plan: PreprocessingPlan, X: pd.DataFrame) -> Colu
 
     transformers = []
     if numeric_cols:
-        transformers.append(("numeric", Pipeline([
-            ("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler()),
-        ]), numeric_cols))
+        # R8: clip first, so the scaler never sees the extreme values.
+        # The clipper learns its bounds inside each CV training fold.
+        numeric_steps = []
+        clipper = build_clipper(decisions, numeric_cols)
+        if clipper is not None:
+            numeric_steps.append(("clip", clipper))
+        numeric_steps += [("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]
+        transformers.append(("numeric", Pipeline(numeric_steps), numeric_cols))
     if onehot_cols:
         transformers.append(("onehot", Pipeline([
             ("impute", SimpleImputer(strategy="most_frequent")),

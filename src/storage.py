@@ -81,6 +81,13 @@ class RunStorage:
             ).fetchall()
             return [StoredRun(**dict(r)) for r in rows]
 
+    def get_plan(self, run_id: int) -> Optional[PreprocessingPlan]:
+        """Loads the stored preprocessing plan. Runs saved before outlier handling still load."""
+        run = self.get_run(run_id)
+        if run is None or not run["plan_json"]:
+            return None
+        return PreprocessingPlan.from_dict(json.loads(run["plan_json"]))
+
     def get_run(self, run_id: int) -> Optional[dict]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row

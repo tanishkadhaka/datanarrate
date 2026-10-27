@@ -4,15 +4,22 @@ Reads a DatasetProfile and decides, column by column, how to handle missing
 values, encoding, and scaling — using explicit rules, not a trained model.
 Every decision carries a plain-language reason, and the full sequence of
 actions is recorded as a readable step trace.
+
+Rules (the ID is shown at the start of each reason):
+  R1 identifier column dropped      R5 high-cardinality -> frequency encode
+  R2 mostly-missing column dropped  R6 low-cardinality -> one-hot encode
+  R3 numeric missing -> median      R7 numeric -> standard scaling
+  R4 categorical missing -> mode    R8 outliers -> clip to fences
 """
 
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass, field, fields
+from typing import List, Optional
 from src.profiler import DatasetProfile, ColumnProfile
 
 
 MISSING_DROP_THRESHOLD = 40.0   # % missing above which we drop the column
 ID_LIKE_UNIQUE_RATIO = 0.95     # unique/total rows above this = identifier, not a feature
+OUTLIER_MIN_PCT = 1.0           # % of values outside the fences below which we ignore outliers
 
 
 @dataclass
@@ -22,6 +29,10 @@ class ColumnDecision:
     encoding_action: str       # "none" | "one_hot" | "frequency_encode"
     scaling_action: str        # "none" | "standard_scale"
     reasons: List[str] = field(default_factory=list)
+    outlier_action: str = "none"      # "none" | "clip"
+    outlier_bounds: str = "none"      # "none" | "iqr" | "percentile" (how the clip bounds are learned)
+    clip_lower: Optional[float] = None  # bounds measured on the full data, for display only;
+    clip_upper: Optional[float] = None  # the pipeline learns its own bounds from each training fold
 
 
 @dataclass
@@ -36,6 +47,17 @@ class PreprocessingPlan:
             "summary": self.summary,
             "step_trace": self.step_trace,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PreprocessingPlan":
+        """Rebuilds a plan from stored JSON. Runs saved before R8 have no outlier fields."""
+        known = {f.name for f in fields(ColumnDecision)}
+        decisions = [
+            ColumnDecision(**{k: v for k, v in c.items() if k in known})
+            for c in data.get("column_decisions", [])
+        ]
+        return cls(column_decisions=decisions, summary=data.get("summary", []),
+                   step_trace=data.get("step_trace", []))
 
 
 class PreprocessingDecider:
@@ -55,7 +77,7 @@ class PreprocessingDecider:
         # --- Identifier-column check (runs first, overrides everything else) ---
         if col.dtype == "categorical" and n_rows > 0 and (col.n_unique / n_rows) >= ID_LIKE_UNIQUE_RATIO:
             reasons.append(
-                f"{col.n_unique} unique values across {n_rows} rows means this is almost "
+                f"R1: {col.n_unique} unique values across {n_rows} rows means this is almost "
                 f"certainly an identifier column (e.g. a customer ID), not a real feature — "
                 f"encoding it would just memorize row identity, so it is dropped."
             )
@@ -68,20 +90,20 @@ class PreprocessingDecider:
         if col.missing_pct >= MISSING_DROP_THRESHOLD:
             missing_action = "drop_column"
             reasons.append(
-                f"{col.missing_pct}% missing exceeds the {MISSING_DROP_THRESHOLD}% threshold — "
+                f"R2: {col.missing_pct}% missing exceeds the {MISSING_DROP_THRESHOLD}% threshold — "
                 f"imputing this much data would be unreliable, so the column is dropped."
             )
         elif col.missing_pct > 0:
             if col.dtype == "numeric":
                 missing_action = "impute_median"
                 reasons.append(
-                    f"{col.missing_pct}% missing — median imputation preserves the row and "
+                    f"R3: {col.missing_pct}% missing — median imputation preserves the row and "
                     f"is robust to outliers, unlike mean imputation."
                 )
             else:
                 missing_action = "impute_mode"
                 reasons.append(
-                    f"{col.missing_pct}% missing — imputing with the most frequent category "
+                    f"R4: {col.missing_pct}% missing — imputing with the most frequent category "
                     f"keeps the row without inventing a numeric value."
                 )
         else:
@@ -93,29 +115,76 @@ class PreprocessingDecider:
             if col.is_high_cardinality:
                 encoding_action = "frequency_encode"
                 reasons.append(
-                    f"{col.n_unique} unique categories is high-cardinality — one-hot encoding "
+                    f"R5: {col.n_unique} unique categories is high-cardinality — one-hot encoding "
                     f"would explode the feature space, so frequency encoding is used instead."
                 )
             else:
                 encoding_action = "one_hot"
                 reasons.append(
-                    f"{col.n_unique} unique categories is low enough for one-hot encoding "
+                    f"R6: {col.n_unique} unique categories is low enough for one-hot encoding "
                     f"without blowing up dimensionality."
                 )
+
+        # --- Outliers (numeric only) ---
+        outlier = {}
+        if col.dtype == "numeric" and missing_action != "drop_column":
+            outlier = self._decide_outliers(col, reasons)
 
         # --- Scaling (numeric only) ---
         scaling_action = "none"
         if col.dtype == "numeric" and missing_action != "drop_column":
             scaling_action = "standard_scale"
             reasons.append(
-                "Numeric column — standardized so distance- and gradient-based models "
+                "R7: Numeric column — standardized so distance- and gradient-based models "
                 "aren't dominated by columns with larger raw scales."
             )
 
         return ColumnDecision(
             column=col.name, missing_action=missing_action,
             encoding_action=encoding_action, scaling_action=scaling_action, reasons=reasons,
+            **outlier,
         )
+
+    def _decide_outliers(self, col: ColumnProfile, reasons: List[str]) -> dict:
+        """Rule R8. Adds the reason to the list and returns the outlier fields of the decision."""
+        pct = col.outlier_pct
+
+        if col.n_unique <= 2:
+            reasons.append("R8: Only 2 distinct values, so there are no outliers to clip.")
+            return {}
+
+        if pct < OUTLIER_MIN_PCT:
+            reasons.append(
+                f"R8: Only {pct}% of values fall outside the IQR fences — too few outliers "
+                f"to matter, so values are left as they are."
+            )
+            return {}
+
+        if not col.iqr_is_zero:
+            lo, hi = round(col.lower_fence, 2), round(col.upper_fence, 2)
+            reasons.append(
+                f"R8: {pct}% of values fall outside [{lo}, {hi}]; clipping to these fences "
+                f"stops extreme values dominating scaling."
+            )
+            return {"outlier_action": "clip", "outlier_bounds": "iqr",
+                    "clip_lower": col.lower_fence, "clip_upper": col.upper_fence}
+
+        # IQR is 0, so the fences would flag every value that differs from the middle 50%
+        if col.p99 > col.p01:
+            lo, hi = round(col.p01, 2), round(col.p99, 2)
+            reasons.append(
+                f"R8: The IQR is 0 (most values are identical), so the IQR fences would flag "
+                f"every different value. Using the 1st and 99th percentiles instead: "
+                f"{pct}% of values are unusual, clipping to [{lo}, {hi}]."
+            )
+            return {"outlier_action": "clip", "outlier_bounds": "percentile",
+                    "clip_lower": col.p01, "clip_upper": col.p99}
+
+        reasons.append(
+            "R8: The IQR is 0 and the 1st and 99th percentiles are equal, so there is no "
+            "sensible range to clip to — values are left as they are."
+        )
+        return {}
 
     def _build_step_trace(self, decisions: List[ColumnDecision]) -> List[str]:
         trace = []
@@ -128,6 +197,7 @@ class PreprocessingDecider:
         dropped = [d.column for d in decisions if d.missing_action == "drop_column"]
         imputed = [d.column for d in decisions if d.missing_action.startswith("impute")]
         encoded = [d.column for d in decisions if d.encoding_action != "none"]
+        clipped = [d.column for d in decisions if d.outlier_action == "clip"]
         scaled = [d.column for d in decisions if d.scaling_action != "none"]
 
         summary = []
@@ -137,6 +207,8 @@ class PreprocessingDecider:
             summary.append(f"{len(imputed)} column(s) imputed: {imputed}")
         if encoded:
             summary.append(f"{len(encoded)} categorical column(s) encoded: {encoded}")
+        if clipped:
+            summary.append(f"{len(clipped)} numeric column(s) clipped for outliers (R8): {clipped}")
         if scaled:
             summary.append(f"{len(scaled)} numeric column(s) scheduled for scaling")
         if not summary:
