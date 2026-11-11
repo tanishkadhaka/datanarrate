@@ -49,3 +49,14 @@ def test_missing_api_key_raises():
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(ValueError):
             Narrator(api_key=None)
+
+
+def test_build_prompt_includes_outlier_decisions():
+    profile, plan, result = get_pipeline_outputs()
+    narrator = Narrator(api_key="fake_key_for_prompt_test")
+    prompt = narrator.build_prompt(profile, plan, result)
+    clipped = [d for d in plan.column_decisions if d.outlier_action == "clip"]
+    assert clipped, "breast cancer data should have clipped columns"
+    assert "Outlier handling (rule R8" in prompt
+    assert clipped[0].column in prompt
+    assert "of values were outliers, clipped to" in prompt

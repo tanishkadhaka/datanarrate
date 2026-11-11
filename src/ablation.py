@@ -13,12 +13,12 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import f1_score, accuracy_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+from sklearn.base import clone
 
 from src.profiler import DatasetProfile
 from src.preprocessor import PreprocessingPlan
-from src.model_selector import FrequencyEncoder
+from src.model_selector import FrequencyEncoder, _build_candidates
+from src.outlier import build_clipper
 
 
 @dataclass
@@ -28,26 +28,19 @@ class AblationResult:
     score_drop_from_full: float
 
 
-MODEL_BUILDERS = {
-    "logistic_regression": lambda: LogisticRegression(max_iter=1000),
-    "random_forest": lambda: RandomForestClassifier(n_estimators=200, random_state=42),
-    "gradient_boosting": lambda: GradientBoostingClassifier(random_state=42),
-    "voting_ensemble": lambda: VotingClassifier(estimators=[
-        ("lr", LogisticRegression(max_iter=1000)),
-        ("rf", RandomForestClassifier(n_estimators=200, random_state=42)),
-        ("gb", GradientBoostingClassifier(random_state=42)),
-    ], voting="soft"),
-}
-
-
 def run_ablation(df: pd.DataFrame, profile: DatasetProfile, plan: PreprocessingPlan,
-                  best_model_name: str, metric: str, cv_folds: int = 5) -> List[AblationResult]:
+                  best_model_name: str, metric: str, cv_folds: int = 5,
+                  variant_names: List[str] = None, random_state: int = 42) -> List[AblationResult]:
+    """
+    variant_names limits which variants are run (full_pipeline is always run,
+    because the other scores are compared to it). None runs all of them.
+    """
     X_full = df.drop(columns=[profile.target_column])
     y = LabelEncoder().fit_transform(df[profile.target_column])
     dropped = [d.column for d in plan.column_decisions if d.missing_action == "drop_column"]
     X = X_full.drop(columns=[c for c in dropped if c in X_full.columns])
     decisions = {d.column: d for d in plan.column_decisions if d.column in X.columns}
-    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     is_binary = len(set(y)) == 2
 
     def score_of(pipe) -> float:
@@ -56,7 +49,8 @@ def run_ablation(df: pd.DataFrame, profile: DatasetProfile, plan: PreprocessingP
             return accuracy_score(y, y_pred)
         return f1_score(y, y_pred, average="binary" if is_binary else "macro", zero_division=0)
 
-    def build_preprocessor(use_scaling=True, use_smart_encoding=True, use_imputation=True) -> ColumnTransformer:
+    def build_preprocessor(use_scaling=True, use_smart_encoding=True, use_imputation=True,
+                           use_outlier_clipping=True) -> ColumnTransformer:
         numeric_cols = [c for c, d in decisions.items() if d.scaling_action == "standard_scale"]
         onehot_cols = [c for c, d in decisions.items() if d.encoding_action == "one_hot"]
         freq_cols = [c for c, d in decisions.items() if d.encoding_action == "frequency_encode"]
@@ -68,7 +62,12 @@ def run_ablation(df: pd.DataFrame, profile: DatasetProfile, plan: PreprocessingP
 
         transformers = []
         if numeric_cols:
-            steps = [("impute", SimpleImputer(strategy=impute_strategy_num, **num_fill))]
+            steps = []
+            if use_outlier_clipping:
+                clipper = build_clipper(decisions, numeric_cols)
+                if clipper is not None:
+                    steps.append(("clip", clipper))
+            steps.append(("impute", SimpleImputer(strategy=impute_strategy_num, **num_fill)))
             if use_scaling:
                 steps.append(("scale", StandardScaler()))
             transformers.append(("numeric", Pipeline(steps), numeric_cols))
@@ -93,18 +92,22 @@ def run_ablation(df: pd.DataFrame, profile: DatasetProfile, plan: PreprocessingP
                 ]), all_cat))
         return ColumnTransformer(transformers, remainder="drop")
 
-    model_fn = MODEL_BUILDERS[best_model_name]
+    # same model settings as the model selector uses
+    base_model = _build_candidates()[best_model_name]
     variants = {
-        "full_pipeline": build_preprocessor(True, True, True),
-        "no_scaling": build_preprocessor(False, True, True),
-        "no_smart_encoding_forced_onehot": build_preprocessor(True, False, True),
-        "no_imputation_zero_fill": build_preprocessor(True, True, False),
+        "full_pipeline": build_preprocessor(True, True, True, True),
+        "no_scaling": build_preprocessor(False, True, True, True),
+        "no_smart_encoding_forced_onehot": build_preprocessor(True, False, True, True),
+        "no_imputation_zero_fill": build_preprocessor(True, True, False, True),
+        "no_outlier_clipping_R8": build_preprocessor(True, True, True, False),
     }
 
     results = []
     full_score = None
     for name, preprocessor in variants.items():
-        pipe = Pipeline([("preprocess", preprocessor), ("model", model_fn())])
+        if variant_names is not None and name != "full_pipeline" and name not in variant_names:
+            continue
+        pipe = Pipeline([("preprocess", preprocessor), ("model", clone(base_model))])
         score = score_of(pipe)
         if name == "full_pipeline":
             full_score = score

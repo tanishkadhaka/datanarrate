@@ -1,0 +1,13 @@
+dataset,n_rows,model,metric,columns_clipped,mean_without,std_without,mean_with,std_with,difference,seeds_with_better,n_seeds,verdict
+adult,48842,logistic_regression,f1,5,0.6768,0.0007,0.6778,0.0007,0.001,4,5,better
+adult,48842,random_forest,f1,5,0.6673,0.0024,0.667,0.0019,-0.0003,2,5,within 1 std
+adult,48842,gradient_boosting,f1,5,0.6821,0.0009,0.6807,0.0004,-0.0014,0,5,worse
+adult,48842,voting_ensemble,f1,5,0.7064,0.002,0.7052,0.0022,-0.0012,1,5,within 1 std
+wine,178,logistic_regression,f1,6,0.9762,0.0099,0.9731,0.0045,-0.0031,2,5,within 1 std
+wine,178,random_forest,f1,6,0.9815,0.0064,0.9815,0.0064,0.0,0,5,identical
+wine,178,gradient_boosting,f1,6,0.9499,0.0148,0.9499,0.0148,0.0,0,5,identical
+wine,178,voting_ensemble,f1,6,0.977,0.0044,0.979,0.0043,0.0021,2,5,within 1 std
+diabetes_3class,442,logistic_regression,f1,4,0.5555,0.011,0.5629,0.0093,0.0073,5,5,within 1 std
+diabetes_3class,442,random_forest,f1,4,0.5614,0.0102,0.5617,0.0083,0.0002,4,5,within 1 std
+diabetes_3class,442,gradient_boosting,f1,4,0.5459,0.0119,0.5522,0.0059,0.0064,4,5,within 1 std
+diabetes_3class,442,voting_ensemble,f1,4,0.5674,0.0138,0.5701,0.0152,0.0026,3,5,within 1 std
