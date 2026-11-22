@@ -10,5 +10,5 @@ fastapi==0.128.8
 uvicorn==0.39.0
 python-multipart==0.0.20
 # PDF report (item 7). Ranges, not pins: both publish wheels for Python 3.9.
-reportlab>=4.0,<5
+reportlab>=4.0,<4.3   # 4.3+ needs Python 3.10; the Docker image is 3.9
 matplotlib>=3.7,<3.10

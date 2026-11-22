@@ -11,5 +11,5 @@ python-multipart
 streamlit
 pytest
 httpx
-reportlab
+reportlab<4.3
 matplotlib

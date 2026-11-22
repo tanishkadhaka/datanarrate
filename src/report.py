@@ -33,6 +33,9 @@ def _ascii(text: Any) -> str:
     """The built-in PDF fonts cannot draw every Unicode character, so swap the common ones."""
     s = str(text if text is not None else "")
     for a, b in {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-",
+                 "‐": "-", "‑": "-", "‒": "-", "−": "-",          # hyphens / minus
+                 " ": " ", " ": " ", " ": " ", " ": " ",         # thin / narrow spaces
+                 "​": "",
                  "→": "->", "≥": ">=", "≤": "<=", "×": "x", "…": "...",
                  "✅": "", "⚠": "", "\U0001F9E0": "", "\U0001F3C6": ""}.items():
         s = s.replace(a, b)

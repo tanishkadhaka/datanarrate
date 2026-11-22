@@ -45,6 +45,9 @@ WINNER_WORDS = ["winner", "best", "selected", "chosen", "top model", "top-perfor
 
 NUMBER_RE = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(%?)(?![A-Za-z0-9])")
 SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])|\n+")
+# LLMs often group thousands with a (thin / no-break) space: "416 810", "1 980.21"
+SPACE_GROUP_RE = re.compile(r"(?<=\d)[    ](?=\d{3}(?!\d))")
+STRING_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
 # ---------- helpers ----------
@@ -62,6 +65,20 @@ def _leaves(obj: Any) -> Iterable[float]:
     elif isinstance(obj, (list, tuple)):
         for v in obj:
             yield from _leaves(v)
+
+
+def _string_numbers(obj: Any) -> Iterable[float]:
+    """Numbers written inside text values, e.g. the class labels '<=50K' and '>50K'."""
+    if isinstance(obj, str):
+        for m in STRING_NUMBER_RE.finditer(obj):
+            yield float(m.group())
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _string_numbers(k)
+            yield from _string_numbers(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _string_numbers(v)
 
 
 def _derived_values(selection: Dict[str, Any]) -> List[float]:
@@ -129,11 +146,14 @@ def check_narration(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     models = {m["model_name"]: m for m in selection.get("candidate_results", [])}
     best = selection.get("best_model_name")
 
-    allowed = list(_leaves({k: facts.get(k) for k in
-                            ("selection", "missing_report", "missing_handling", "profile", "preprocessing")}))
+    sources = {k: facts.get(k) for k in
+               ("selection", "missing_report", "missing_handling", "profile", "preprocessing")}
+    allowed = list(_leaves(sources))
+    allowed += list(_string_numbers(sources))
     allowed += _derived_values(selection)
 
-    sentences = [s for s in SENT_SPLIT.split(text or "") if s and s.strip()]
+    text = SPACE_GROUP_RE.sub("", text or "")
+    sentences = [s for s in SENT_SPLIT.split(text) if s and s.strip()]
     findings: List[Dict[str, str]] = []
     checked = verified = 0
 
@@ -198,6 +218,23 @@ def check_narration(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                                 f"claims {hi} beats {lo} on {cmp_metric}, but the scores are "
                                 f"{models[hi][cmp_metric]:.4f} vs {models[lo][cmp_metric]:.4f}"))
 
+        # 3b. ladder direction: "X improved the score to <s>" when that step actually lowered it
+        if re.search(r"\b(improv|rais|lift|increas|boost|gain|add(ed|s)? \d)", low):
+            ladder = [s for s in selection.get("ladder", []) if isinstance(s.get("score"), (int, float))]
+            for i in range(1, len(ladder)):
+                prev, cur = ladder[i - 1]["score"], ladder[i]["score"]
+                if cur >= prev:
+                    continue
+                for m in NUMBER_RE.finditer(sent):
+                    raw = m.group(1)
+                    if "." in raw and m.group(2) != "%" and _matches(float(raw.replace(",", "")),
+                                                                    len(raw.split(".")[1]), False, [cur]):
+                        findings.append(_finding(
+                            "ladder", "high", sent,
+                            f"describes '{ladder[i].get('label', 'step')}' as an improvement, but it lowered "
+                            f"the score from {prev:.4f} to {cur:.4f}"))
+                        break
+
         # 4. winner claims
         if best and found and any(w in low for w in WINNER_WORDS) and "baseline" not in low \
                 and not any(w in low for w in ("runner-up", "runner up", "second", "worst", "not the", "unlike")):
@@ -214,15 +251,23 @@ def check_narration(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                 "not a majority-class or random guesser"))
 
         # 6. dropped columns
-        if re.search(r"\b(dropp|remov|discard)", low) and not re.search(r"\b(not|never|no|none|without)\b", low):
+        # "clipped to remove extreme values" removes values, not columns, so outlier sentences are skipped
+        if re.search(r"\b(dropp|remov|discard)", low) and not re.search(r"\b(not|never|no|none|without)\b", low) \
+                and not re.search(r"\b(clip|outlier|extreme|cap|capped|winsor)", low):
             decisions = facts.get("preprocessing", {}).get("column_decisions", [])
             dropped = {d["column"] for d in decisions if d.get("missing_action") == "drop_column"}
             all_cols = {d["column"] for d in decisions}
+            norm = re.sub(r"[‐‑‒–]", "-", low)      # LLMs write "education‑num" with U+2011
             for col in all_cols:
-                if re.search(r"(?<![\w-])" + re.escape(col.lower()) + r"(?![\w-])", low) and col not in dropped:
+                if re.search(r"(?<![\w-])" + re.escape(col.lower()) + r"(?![\w-])", norm) and col not in dropped:
                     findings.append(_finding(
                         "column", "medium", sent, f"says '{col}' was dropped, but it was kept"))
 
+    unique: List[Dict[str, str]] = []
+    for f in findings:                       # the same number twice in one sentence is one finding
+        if f not in unique:
+            unique.append(f)
+    findings = unique
     flagged = len(findings)
     return {
         "summary": {

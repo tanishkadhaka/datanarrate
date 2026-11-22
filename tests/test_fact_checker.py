@@ -89,3 +89,41 @@ def test_small_counts_and_ordinals_are_ignored():
 
 def test_empty_text():
     assert check_narration("", facts())["summary"]["claims_flagged"] == 0
+
+
+def test_space_grouped_numbers_and_label_numbers_are_not_flagged():
+    from src.fact_checker import check_narration
+    facts = {"selection": {"candidate_results": [], "best_score": 0.7, "classes": ["<=50K", ">50K"]},
+             "preprocessing": {"bounds": [-63168.0, 416810.0, 1980.21],
+                               "column_decisions": [{"column": "education"}, {"column": "education-num"}]}}
+    text = ("Values were clipped to [‑63 168, 416 810] and [0, 1 980.21]. "
+            "Class 1 means more than $50 K, class 0 means at most $50 K. "
+            "Education‑num was clipped to remove extreme values.")
+    report = check_narration(text, facts)
+    assert report["findings"] == [], report["findings"]
+
+
+def test_dropped_column_claim_still_flagged():
+    from src.fact_checker import check_narration
+    facts = {"selection": {"candidate_results": []},
+             "preprocessing": {"column_decisions": [{"column": "age", "missing_action": "impute"}]}}
+    report = check_narration("The age column was dropped.", facts)
+    assert [f["type"] for f in report["findings"]] == ["column"]
+
+
+def test_ladder_step_that_lowered_the_score_is_flagged():
+    from src.fact_checker import check_narration
+    facts = {"selection": {"candidate_results": [], "ladder": [
+        {"label": "Fixed baseline", "score": 0.6583}, {"label": "+ class balancing", "score": 0.6824},
+        {"label": "+ DataNarrate preprocessing", "score": 0.6766}, {"label": "+ best model chosen", "score": 0.7049}]}}
+    text = ("First, adding class weighting raised the F1 to 0.6824. "
+            "Second, applying DataNarrate preprocessing improved the score to 0.6766. "
+            "Preprocessing alone gave 0.6766, slightly lower.")
+    report = check_narration(text, facts)
+    assert [f["type"] for f in report["findings"]] == ["ladder"], report["findings"]
+    assert "0.6766" in report["findings"][0]["sentence"]
+
+
+def test_pdf_text_has_no_unicode_question_marks():
+    from src.report import _ascii
+    assert _ascii("10 000 rows, one‑hot, −63 168") == "10 000 rows, one-hot, -63 168"
